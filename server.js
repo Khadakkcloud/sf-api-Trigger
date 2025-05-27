@@ -1,151 +1,154 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const JSZip = require('jszip');
-const xml2js = require('xml2js');
+const bodyParser = require('body-parser');
+const AdmZip = require('adm-zip');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-const PORT = process.env.PORT || 3000;
+const {
+  CLIENT_ID,
+  CLIENT_SECRET,
+  LOGIN_URL,
+} = process.env;
+
+const API_VERSION = '58.0'; // adjust based on your org version
 
 app.post('/api/toggle-trigger', async (req, res) => {
-    const { username, password, triggerApiName, status } = req.body;
+  const { username, password, triggerApiName, status } = req.body;
 
-    if (!['Active', 'Inactive'].includes(status)) {
-        return res.status(400).json({ error: 'Status must be either Active or Inactive' });
-    }
+  if (!username || !password || !triggerApiName || !status) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
 
-    try {
-        // Step 1: Login to Salesforce
-        const loginUrl = process.env.LOGIN_URL || 'https://login.salesforce.com';
-        const response = await axios.post(`${loginUrl}/services/oauth2/token`, null, {
-            params: {
-                grant_type: 'password',
-                client_id: process.env.CLIENT_ID,
-                client_secret: process.env.CLIENT_SECRET,
-                username,
-                password
-            }
-        });
+  try {
+    // Authenticate with Salesforce
+    const loginResponse = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
+      params: {
+        grant_type: 'password',
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        username,
+        password,
+      },
+    });
 
-        const { access_token, instance_url } = response.data;
+    const accessToken = loginResponse.data.access_token;
+    const instanceUrl = loginResponse.data.instance_url;
 
-        // Step 2: Create the .trigger-meta.xml and dummy trigger file
-        const zip = new JSZip();
+    console.log('✅ Logged in to Salesforce');
 
-        const triggerMetaXml = `<?xml version="1.0" encoding="UTF-8"?>
+    // Create zip with updated metadata
+    const zip = new AdmZip();
+
+    // Valid Apex Trigger body
+    const triggerBody = `trigger ${triggerApiName} on Account (before insert) { /* dummy body */ }`;
+    zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(triggerBody));
+
+    const metaXml = `<?xml version="1.0" encoding="UTF-8"?>
 <ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">
     <status>${status}</status>
+    <apiVersion>${API_VERSION}</apiVersion>
 </ApexTrigger>`;
+    zip.addFile(`triggers/${triggerApiName}.trigger-meta.xml`, Buffer.from(metaXml));
 
-        // Required placeholder trigger body to avoid syntax errors
-        const triggerBody = `trigger ${triggerApiName} on Account (before insert) {
-    // Dummy body to deploy with updated status
-}`;
-
-        zip.file(`triggers/${triggerApiName}.trigger`, triggerBody);
-        zip.file(`triggers/${triggerApiName}.trigger-meta.xml`, triggerMetaXml);
-
-        const packageXml = `<?xml version="1.0" encoding="UTF-8"?>
+    const packageXml = `<?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
     <types>
         <members>${triggerApiName}</members>
         <name>ApexTrigger</name>
     </types>
-    <version>58.0</version>
+    <version>${API_VERSION}</version>
 </Package>`;
-        zip.file('package.xml', packageXml);
+    zip.addFile('package.xml', Buffer.from(packageXml));
 
-        const zipData = await zip.generateAsync({ type: 'base64' });
+    const zipBuffer = zip.toBuffer();
+    console.log('📦 Metadata zip created');
 
-        // Step 3: Deploy via Metadata API (SOAP)
-        const soapBody = `<?xml version="1.0" encoding="utf-8"?>
-<env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-              xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
-  <env:Header>
-    <SessionHeader xmlns="http://soap.sforce.com/2006/04/metadata">
-      <sessionId>${access_token}</sessionId>
+    // Deploy to Salesforce
+    const deployUrl = `${instanceUrl}/services/Soap/m/${API_VERSION}`;
+    const deployEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xmlns="http://soap.sforce.com/2006/04/metadata">
+  <soapenv:Header>
+    <SessionHeader>
+      <sessionId>${accessToken}</sessionId>
     </SessionHeader>
-  </env:Header>
-  <env:Body>
-    <deploy xmlns="http://soap.sforce.com/2006/04/metadata">
-      <ZipFile>${zipData}</ZipFile>
+  </soapenv:Header>
+  <soapenv:Body>
+    <deploy>
+      <ZipFile>${zipBuffer.toString('base64')}</ZipFile>
       <DeployOptions>
-        <allowMissingFiles>false</allowMissingFiles>
-        <autoUpdatePackage>false</autoUpdatePackage>
-        <checkOnly>false</checkOnly>
-        <ignoreWarnings>true</ignoreWarnings>
         <performRetrieve>false</performRetrieve>
-        <purgeOnDelete>false</purgeOnDelete>
         <rollbackOnError>true</rollbackOnError>
-        <runAllTests>false</runAllTests>
         <singlePackage>true</singlePackage>
       </DeployOptions>
     </deploy>
-  </env:Body>
-</env:Envelope>`;
+  </soapenv:Body>
+</soapenv:Envelope>`;
 
-        const deployRes = await axios.post(`${instance_url}/services/Soap/m/58.0`, soapBody, {
-            headers: {
-                'Content-Type': 'text/xml',
-                'SOAPAction': '""'
-            }
-        });
+    const deployHeaders = {
+      'Content-Type': 'text/xml',
+      'SOAPAction': 'deploy',
+    };
 
-        // Extract deployment ID
-        const match = deployRes.data.match(/<id>(.*?)<\/id>/);
-        if (!match) {
-            return res.status(500).json({ error: 'Failed to extract deployment ID' });
-        }
+    const deployResponse = await axios.post(deployUrl, deployEnvelope, { headers: deployHeaders });
+    const deployIdMatch = deployResponse.data.match(/<id>(.*?)<\/id>/);
+    if (!deployIdMatch) throw new Error('Deployment ID not found');
 
-        const deployId = match[1];
+    const deployId = deployIdMatch[1];
+    console.log(`🚀 Deployment started: ID = ${deployId}`);
 
-        // Step 4: Poll the status
-        const checkBody = `<?xml version="1.0" encoding="utf-8"?>
-<env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-              xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
-  <env:Header>
-    <SessionHeader xmlns="http://soap.sforce.com/2006/04/metadata">
-      <sessionId>${access_token}</sessionId>
+    // Poll deploy status
+    const checkDeployEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns="http://soap.sforce.com/2006/04/metadata">
+  <soapenv:Header>
+    <SessionHeader>
+      <sessionId>${accessToken}</sessionId>
     </SessionHeader>
-  </env:Header>
-  <env:Body>
-    <checkDeployStatus xmlns="http://soap.sforce.com/2006/04/metadata">
-      <id>${deployId}</id>
+  </soapenv:Header>
+  <soapenv:Body>
+    <checkDeployStatus>
+      <asyncProcessId>${deployId}</asyncProcessId>
       <includeDetails>true</includeDetails>
     </checkDeployStatus>
-  </env:Body>
-</env:Envelope>`;
+  </soapenv:Body>
+</soapenv:Envelope>`;
 
-        let done = false;
-        let result;
-        let retries = 0;
+    const statusUrl = `${instanceUrl}/services/Soap/m/${API_VERSION}`;
+    let done = false;
+    let pollCount = 0;
+    let finalResponse;
 
-        while (!done && retries < 10) {
-            const checkRes = await axios.post(`${instance_url}/services/Soap/m/58.0`, checkBody, {
-                headers: {
-                    'Content-Type': 'text/xml',
-                    'SOAPAction': '""'
-                }
-            });
+    while (!done && pollCount < 10) {
+      const checkResponse = await axios.post(statusUrl, checkDeployEnvelope, {
+        headers: deployHeaders,
+      });
 
-            done = checkRes.data.includes('<done>true</done>');
-            result = checkRes.data;
-            if (!done) await new Promise(resolve => setTimeout(resolve, 3000));
-            retries++;
-        }
+      finalResponse = checkResponse.data;
+      done = /<done>true<\/done>/.test(finalResponse);
 
-        return res.json({ success: true, response: result });
-
-    } catch (err) {
-        console.error('Deployment Error:', err.message);
-        return res.status(500).json({ error: err.message });
+      if (!done) {
+        await new Promise((r) => setTimeout(r, 3000));
+        pollCount++;
+      }
     }
+
+    console.log('✅ Deployment completed:\n', finalResponse);
+    return res.status(200).json({ success: true, response: finalResponse });
+
+  } catch (err) {
+    console.error('❌ Error:', err?.response?.data || err.message || err.toString());
+    return res.status(500).json({
+      error: err?.response?.data || err.message || err.toString(),
+    });
+  }
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
