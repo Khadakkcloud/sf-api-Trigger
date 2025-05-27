@@ -3,8 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
 const AdmZip = require('adm-zip');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(bodyParser.json());
@@ -15,7 +13,7 @@ const {
   LOGIN_URL,
 } = process.env;
 
-const API_VERSION = '58.0'; // adjust based on your org version
+const API_VERSION = '58.0'; // Make sure this matches your org's version
 
 app.post('/api/toggle-trigger', async (req, res) => {
   const { username, password, triggerApiName, status } = req.body;
@@ -25,7 +23,7 @@ app.post('/api/toggle-trigger', async (req, res) => {
   }
 
   try {
-    // Authenticate with Salesforce
+    // Step 1: Authenticate with Salesforce
     const loginResponse = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
       params: {
         grant_type: 'password',
@@ -38,14 +36,12 @@ app.post('/api/toggle-trigger', async (req, res) => {
 
     const accessToken = loginResponse.data.access_token;
     const instanceUrl = loginResponse.data.instance_url;
-
     console.log('✅ Logged in to Salesforce');
 
-    // Create zip with updated metadata
+    // Step 2: Create ZIP file with metadata
     const zip = new AdmZip();
 
-    // Valid Apex Trigger body
-    const triggerBody = `trigger ${triggerApiName} on Account (before insert) { /* dummy body */ }`;
+    const triggerBody = `trigger ${triggerApiName} on Account (before insert) { System.debug('${status} deployment'); }`;
     zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(triggerBody));
 
     const metaXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -66,9 +62,9 @@ app.post('/api/toggle-trigger', async (req, res) => {
     zip.addFile('package.xml', Buffer.from(packageXml));
 
     const zipBuffer = zip.toBuffer();
-    console.log('📦 Metadata zip created');
+    console.log('📦 Metadata ZIP prepared');
 
-    // Deploy to Salesforce
+    // Step 3: Deploy ZIP
     const deployUrl = `${instanceUrl}/services/Soap/m/${API_VERSION}`;
     const deployEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -86,6 +82,8 @@ app.post('/api/toggle-trigger', async (req, res) => {
         <performRetrieve>false</performRetrieve>
         <rollbackOnError>true</rollbackOnError>
         <singlePackage>true</singlePackage>
+        <checkOnly>false</checkOnly>
+        <testLevel>NoTestRun</testLevel>
       </DeployOptions>
     </deploy>
   </soapenv:Body>
@@ -103,7 +101,7 @@ app.post('/api/toggle-trigger', async (req, res) => {
     const deployId = deployIdMatch[1];
     console.log(`🚀 Deployment started: ID = ${deployId}`);
 
-    // Poll deploy status
+    // Step 4: Poll deployment status
     const checkDeployEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                   xmlns="http://soap.sforce.com/2006/04/metadata">
