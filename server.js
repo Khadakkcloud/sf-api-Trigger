@@ -16,7 +16,7 @@ app.post('/api/toggle-trigger', async (req, res) => {
   const { username, password, triggerApiName, status } = req.body;
 
   if (!username || !password || !triggerApiName || !status) {
-    return res.status(400).send('Missing required fields');
+    return res.status(400).send('Missing required fields: username, password, triggerApiName, status');
   }
 
   try {
@@ -51,8 +51,10 @@ app.post('/api/toggle-trigger', async (req, res) => {
   <version>58.0</version>
 </Package>`;
 
-    // Add dummy source trigger file (required by Salesforce)
-    zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from('// dummy trigger body'));
+    // Add minimal valid trigger source file
+    zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(
+      `trigger ${triggerApiName} on Account (before insert) {\n}` // Minimal valid Apex trigger
+    ));
 
     // Add trigger metadata file
     zip.addFile(`triggers/${triggerApiName}.trigger-meta.xml`, Buffer.from(triggerMetaXml));
