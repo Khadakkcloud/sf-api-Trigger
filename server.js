@@ -39,7 +39,7 @@ function buildZip(triggerApiName, status) {
   const triggerMetaXml = `<?xml version="1.0" encoding="UTF-8"?>
 <ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">
   <status>${status}</status>
-  <apiVersion>58.0</apiVersion>
+  <apiVersion>64.0</apiVersion>
 </ApexTrigger>`;
 
   const packageXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -48,7 +48,7 @@ function buildZip(triggerApiName, status) {
     <members>${triggerApiName}</members>
     <name>ApexTrigger</name>
   </types>
-  <version>58.0</version>
+  <version>64.0</version>
 </Package>`;
 
   zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(triggerBody));
@@ -89,7 +89,7 @@ app.post('/deploy-trigger', async (req, res) => {
     const soapBody = buildSoapEnvelope(base64Zip);
 
     const deployRes = await axios.post(
-      `${instanceUrl}/services/Soap/m/58.0`,
+      `${instanceUrl}/services/Soap/m/64.0`,
       soapBody,
       {
         headers: {
