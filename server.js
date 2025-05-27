@@ -1,39 +1,45 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const JSZip = require('jszip');
-const bodyParser = require('body-parser');
+const AdmZip = require('adm-zip');
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
+
+const {
+  CLIENT_ID,
+  CLIENT_SECRET,
+  LOGIN_URL,
+} = process.env;
 
 app.post('/api/toggle-trigger', async (req, res) => {
-  const { username, password, securityToken, triggerApiName, status } = req.body;
+  const { username, password, triggerApiName, status } = req.body;
 
-  if (!username || !password || !securityToken || !triggerApiName || !status) {
-    return res.status(400).json({ error: 'Missing required parameters' });
+  if (!username || !password || !triggerApiName || !status) {
+    return res.status(400).send('Missing required fields');
   }
 
   try {
-    // STEP 1: Authenticate
-    const tokenRes = await axios.post(`${process.env.LOGIN_URL}/services/oauth2/token`, null, {
+    // Step 1: OAuth Authentication
+    const authRes = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
       params: {
         grant_type: 'password',
-        client_id: process.env.CLIENT_ID,
-        client_secret: process.env.CLIENT_SECRET,
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
         username,
-        password: password + securityToken
+        password,
       }
     });
 
-    const { access_token, instance_url } = tokenRes.data;
+    const access_token = authRes.data.access_token;
+    const instance_url = authRes.data.instance_url;
 
-    // STEP 2: Create trigger metadata and package.xml
-    const zip = new JSZip();
+    // Step 2: Prepare ZIP with trigger metadata and package.xml
+    const zip = new AdmZip();
 
-    const triggerXml = `<?xml version="1.0" encoding="UTF-8"?>
+    const triggerMetaXml = `<?xml version="1.0" encoding="UTF-8"?>
 <ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">
-  <status>${status.toLowerCase() === 'on' ? 'Active' : 'Inactive'}</status>
+  <status>${status}</status>
 </ApexTrigger>`;
 
     const packageXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -45,13 +51,21 @@ app.post('/api/toggle-trigger', async (req, res) => {
   <version>58.0</version>
 </Package>`;
 
-    zip.file(`triggers/${triggerApiName}.trigger-meta.xml`, triggerXml);
-    zip.file('package.xml', packageXml);
-    const zipBase64 = await zip.generateAsync({ type: 'base64' });
+    zip.addFile(`triggers/${triggerApiName}.trigger-meta.xml`, Buffer.from(triggerMetaXml));
+    zip.addFile('package.xml', Buffer.from(packageXml));
 
-    // STEP 3: Deploy using Metadata SOAP
+    const zipBase64 = zip.toBuffer().toString('base64');
+
+    // Step 3: Construct SOAP request
     const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
-<env:Envelope xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
+<env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+              xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
+  <env:Header>
+    <SessionHeader xmlns="http://soap.sforce.com/2006/04/metadata">
+      <sessionId>${access_token}</sessionId>
+    </SessionHeader>
+  </env:Header>
   <env:Body>
     <deploy xmlns="http://soap.sforce.com/2006/04/metadata">
       <ZipFile>${zipBase64}</ZipFile>
@@ -69,19 +83,18 @@ app.post('/api/toggle-trigger', async (req, res) => {
       {
         headers: {
           'Content-Type': 'text/xml',
-          'SOAPAction': '""',
-          'Authorization': `Bearer ${access_token}`
+          'SOAPAction': '""'
         }
       }
     );
 
-    return res.status(200).send({ message: 'Trigger deployment requested.', response: deployRes.data });
-
-  } catch (error) {
-    console.error('Error:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Something went wrong', details: error.response?.data || error.message });
+    res.send(`Deployment response: ${deployRes.data}`);
+  } catch (err) {
+    console.error('Error:', err.response?.data || err.message);
+    res.status(500).send(`Error: ${err.response?.data || err.message}`);
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+app.listen(3000, () => {
+  console.log('🚀 Server listening on port 3000');
+});
