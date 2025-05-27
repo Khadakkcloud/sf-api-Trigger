@@ -1,111 +1,147 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const AdmZip = require('adm-zip');
+const xml2js = require('xml2js');
 const fs = require('fs');
+const AdmZip = require('adm-zip');
+const path = require('path');
 
 const app = express();
 app.use(bodyParser.json());
 
-const {
-  CLIENT_ID,
-  CLIENT_SECRET,
-  LOGIN_URL,
-} = process.env;
+const PORT = process.env.PORT || 3000;
 
-// Auth function
-async function authenticate(username, password) {
-  const url = `${LOGIN_URL}/services/oauth2/token`;
-  const params = new URLSearchParams();
-  params.append('grant_type', 'password');
-  params.append('client_id', CLIENT_ID);
-  params.append('client_secret', CLIENT_SECRET);
-  params.append('username', username);
-  params.append('password', password);
+app.post('/api/toggle-trigger', async (req, res) => {
+  const { username, password, triggerApiName, status } = req.body;
+  const isActive = status.toLowerCase() === 'active';
 
-  const response = await axios.post(url, params);
-  return response.data;
-}
+  // Step 1: Authenticate with Salesforce
+  try {
+    const loginResponse = await axios.post(`${process.env.LOGIN_URL}/services/oauth2/token`, null, {
+      params: {
+        grant_type: 'password',
+        client_id: process.env.CLIENT_ID,
+        client_secret: process.env.CLIENT_SECRET,
+        username,
+        password,
+      },
+    });
 
-function buildZip(triggerApiName, status) {
-  const zip = new AdmZip();
+    const { access_token, instance_url } = loginResponse.data;
+    console.log('✅ Authenticated to Salesforce');
 
-  const triggerBody = `trigger ${triggerApiName} on Account (before insert) {
-  // Dummy body
-}`;
+    // Step 2: Create metadata zip
+    const zip = new AdmZip();
 
-  const triggerMetaXml = `<?xml version="1.0" encoding="UTF-8"?>
+    // trigger-meta.xml content
+    const triggerMetaXml = `
+<?xml version="1.0" encoding="UTF-8"?>
 <ApexTrigger xmlns="http://soap.sforce.com/2006/04/metadata">
-  <status>${status}</status>
-  <apiVersion>64.0</apiVersion>
-</ApexTrigger>`;
+    <status>${isActive ? 'Active' : 'Inactive'}</status>
+    <apiVersion>58.0</apiVersion>
+</ApexTrigger>
+`.trim();
 
-  const packageXml = `<?xml version="1.0" encoding="UTF-8"?>
+    // Add dummy .trigger file (required for deployment)
+    zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from('// dummy trigger body'));
+
+    // Add .trigger-meta.xml file
+    zip.addFile(`triggers/${triggerApiName}.trigger-meta.xml`, Buffer.from(triggerMetaXml));
+
+    // Add package.xml
+    const packageXml = `
+<?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
   <types>
     <members>${triggerApiName}</members>
     <name>ApexTrigger</name>
   </types>
-  <version>64.0</version>
-</Package>`;
+  <version>58.0</version>
+</Package>
+`.trim();
 
-  zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(triggerBody));
-  zip.addFile(`triggers/${triggerApiName}.trigger-meta.xml`, Buffer.from(triggerMetaXml));
-  zip.addFile('package.xml', Buffer.from(packageXml));
+    zip.addFile('package.xml', Buffer.from(packageXml));
 
-  return zip.toBuffer().toString('base64');
-}
+    const zipBuffer = zip.toBuffer();
 
-function buildSoapEnvelope(base64Zip) {
-  return `<?xml version="1.0" encoding="utf-8"?>
-<env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-              xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
-  <env:Body>
-    <deploy xmlns="http://soap.sforce.com/2006/04/metadata">
-      <ZipFile>${base64Zip}</ZipFile>
-      <DeployOptions>
-        <performRetrieve>false</performRetrieve>
-        <rollbackOnError>true</rollbackOnError>
-        <singlePackage>true</singlePackage>
-      </DeployOptions>
-    </deploy>
-  </env:Body>
-</env:Envelope>`;
-}
+    // Step 3: Deploy to Salesforce Metadata API
+    const deployResponse = await axios.post(`${instance_url}/services/Soap/m/58.0`, zipBuffer, {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Authorization': `Bearer ${access_token}`,
+        'SOAPAction': 'deploy',
+      },
+      params: {
+        deployOptions: JSON.stringify({
+          singlePackage: true,
+          rollbackOnError: true,
+        }),
+      },
+    });
 
-app.post('/deploy-trigger', async (req, res) => {
-  const { username, password, triggerApiName, active } = req.body;
+    console.log('📦 Deployment sent. Waiting for result...');
 
-  try {
-    const auth = await authenticate(username, password);
-    const sessionId = auth.access_token;
-    const instanceUrl = auth.instance_url;
+    // Since metadata deploy is async, parse the initial deployment ID
+    const deployIdMatch = deployResponse.data.match(/<id>(.*?)<\/id>/);
+    if (!deployIdMatch) return res.status(500).send('Failed to get deployment ID.');
 
-    const status = active ? 'Active' : 'Inactive';
-    const base64Zip = buildZip(triggerApiName, status);
-    const soapBody = buildSoapEnvelope(base64Zip);
+    const deployId = deployIdMatch[1];
 
-    const deployRes = await axios.post(
-      `${instanceUrl}/services/Soap/m/64.0`,
-      soapBody,
-      {
+    // Step 4: Poll the deploy status
+    let deployDone = false;
+    let deployStatus = '';
+    let deployResult = '';
+
+    while (!deployDone) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const statusResponse = await axios.post(`${instance_url}/services/Soap/m/58.0`, `
+        <env:Envelope xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
+          <env:Header>
+            <SessionHeader xmlns="http://soap.sforce.com/2006/04/metadata">
+              <sessionId>${access_token}</sessionId>
+            </SessionHeader>
+          </env:Header>
+          <env:Body>
+            <checkDeployStatus xmlns="http://soap.sforce.com/2006/04/metadata">
+              <id>${deployId}</id>
+              <includeDetails>true</includeDetails>
+            </checkDeployStatus>
+          </env:Body>
+        </env:Envelope>
+      `.trim(), {
         headers: {
           'Content-Type': 'text/xml',
-          'SOAPAction': '""',
-          'Authorization': `Bearer ${sessionId}`,
         },
-      }
-    );
+      });
 
-    res.send({ message: '✅ Deployment initiated.', response: deployRes.data });
+      const parser = new xml2js.Parser({ explicitArray: false });
+      const parsed = await parser.parseStringPromise(statusResponse.data);
+      const result = parsed['soapenv:Envelope']['soapenv:Body']['checkDeployStatusResponse']['result'];
+
+      deployDone = result.done === 'true';
+      deployStatus = result.status;
+      deployResult = result;
+    }
+
+    if (deployStatus === 'Succeeded') {
+      console.log('✅ Deployment succeeded');
+      return res.status(200).json({ message: `Trigger '${triggerApiName}' set to ${status}` });
+    } else {
+      console.error('❌ Deployment failed:', JSON.stringify(deployResult.details, null, 2));
+      return res.status(500).json({
+        message: 'Deployment failed',
+        errors: deployResult.details?.componentFailures || [],
+      });
+    }
   } catch (err) {
-    console.error('❌ Error during deployment:', err.response?.data || err.message);
-    res.status(500).send(err.response?.data || err.message);
+    console.error('❌ Error:', err.message || err.toString());
+    return res.status(500).json({ error: err.message || err.toString() });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
