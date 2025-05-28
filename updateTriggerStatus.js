@@ -18,7 +18,7 @@ const API_VERSION = '61.0'; // Make sure this matches your org's version
 app.post('/api/toggletrigger', async (req, res) => {
   const {  orgUrl,sessionId, triggerApiName, status } = req.body;
 
-  if (!ApiVersion ||!orgUrl || !sessionId || !triggerApiName || !status) {
+  if (!orgUrl || !sessionId || !triggerApiName || !status) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 ;
