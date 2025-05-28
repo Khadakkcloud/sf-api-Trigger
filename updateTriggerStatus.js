@@ -16,9 +16,9 @@ const {
  // Make sure this matches your org's version
 //const API_VERSION = '61.0'; // Make sure this matches your org's version
 app.post('/api/toggletrigger', async (req, res) => {
-  const { apiVersion, orgUrl,sessionId, triggerApiName, status } = req.body;
+  const { apiVersion, orgUrl,sessionId, triggerApiName, status,bodyTrigger } = req.body;
 const API_VERSION = ''+apiVersion;
-  if (!apiVersion || !orgUrl || !sessionId || !triggerApiName || !status) {
+  if (!apiVersion || !orgUrl || !sessionId || !triggerApiName || !status,!bodyTrigger) {
     con
     return res.status(400).json({ error: 'Missing required fields' });
   }
@@ -42,7 +42,7 @@ const API_VERSION = ''+apiVersion;
     // Step 2: Create ZIP file with metadata
     const zip = new AdmZip();
 
-    const triggerBody = `trigger ${triggerApiName} on Account (before insert) { System.debug('${status} deployment'); }`;
+    const triggerBody = ''+bodyTrigger;//`trigger ${triggerApiName} on Account (before insert) { System.debug('${status} deployment'); }`;
     zip.addFile(`triggers/${triggerApiName}.trigger`, Buffer.from(triggerBody));
 
     const metaXml = `<?xml version="1.0" encoding="UTF-8"?>
