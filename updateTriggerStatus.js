@@ -16,9 +16,9 @@ const {
 const API_VERSION = '58.0'; // Make sure this matches your org's version
 
 app.post('/api/toggletrigger', async (req, res) => {
-  const {  sessionId, triggerApiName, status } = req.body;
+  const {  orgUrl,sessionId, triggerApiName, status } = req.body;
 
-  if ( !sessionId || !triggerApiName || !status) {
+  if (!orgUrl || !sessionId || !triggerApiName || !status) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -35,7 +35,7 @@ app.post('/api/toggletrigger', async (req, res) => {
     // });
 
     const accessToken = sessionId;//loginResponse.data.access_token;
-    const instanceUrl = ${LOGIN_URL};//loginResponse.data.instance_url;
+    const instanceUrl = orgUrl;//loginResponse.data.instance_url;
     console.log('✅ Logged in to Salesforce');
 
     // Step 2: Create ZIP file with metadata
