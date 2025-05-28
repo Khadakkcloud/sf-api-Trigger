@@ -15,7 +15,7 @@ const {
 
 const API_VERSION = '58.0'; // Make sure this matches your org's version
 
-app.post('/api/toggle-trigger', async (req, res) => {
+app.post('/api/toggletrigger', async (req, res) => {
   const {  sessionId, triggerApiName, status } = req.body;
 
   if ( !sessionId || !triggerApiName || !status) {
