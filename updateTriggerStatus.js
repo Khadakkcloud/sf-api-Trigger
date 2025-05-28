@@ -14,13 +14,13 @@ const {
 } = process.env;
 
  // Make sure this matches your org's version
-const API_VERSION = '61.0'; // Make sure this matches your org's version
+//const API_VERSION = '61.0'; // Make sure this matches your org's version
 app.post('/api/toggletrigger', async (req, res) => {
-  const {  orgUrl,sessionId, triggerApiName, status } = req.body;
-
-  if (!orgUrl || !sessionId || !triggerApiName || !status) {
+  const { apiVersion, orgUrl,sessionId, triggerApiName, status } = req.body;
+const API_VERSION = ''+apiVersion;
+  if (!apiVersion || !orgUrl || !sessionId || !triggerApiName || !status) {
     con
-    return res.status(400).json({ error: 'Missing required fields',orgUrl,'-', sessionId });
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 ;
   try {
