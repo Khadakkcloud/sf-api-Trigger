@@ -19,7 +19,7 @@ app.post('/api/toggletrigger', async (req, res) => {
   const {  orgUrl,sessionId, triggerApiName, status } = req.body;
 
   if (!orgUrl || !sessionId || !triggerApiName || !status) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'Missing required fields',orgUrl,'-',sessionId });
   }
 ;
   try {
