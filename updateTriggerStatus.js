@@ -14,14 +14,14 @@ const {
 } = process.env;
 
  // Make sure this matches your org's version
-
+const API_VERSION = '61.0'; // Make sure this matches your org's version
 app.post('/api/toggletrigger', async (req, res) => {
   const {  orgUrl,sessionId, triggerApiName, status } = req.body;
 
   if (!ApiVersion ||!orgUrl || !sessionId || !triggerApiName || !status) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
-const API_VERSION = ApiVersion;
+;
   try {
     // Step 1: Authenticate with Salesforce
     // const loginResponse = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
