@@ -16,26 +16,26 @@ const {
 const API_VERSION = '58.0'; // Make sure this matches your org's version
 
 app.post('/api/toggle-trigger', async (req, res) => {
-  const { username, password, triggerApiName, status } = req.body;
+  const {  sessionId, triggerApiName, status } = req.body;
 
-  if (!username || !password || !triggerApiName || !status) {
+  if ( !sessionId || !triggerApiName || !status) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
     // Step 1: Authenticate with Salesforce
-    const loginResponse = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
-      params: {
-        grant_type: 'password',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        username,
-        password,
-      },
-    });
+    // const loginResponse = await axios.post(`${LOGIN_URL}/services/oauth2/token`, null, {
+    //   params: {
+    //     grant_type: 'password',
+    //     client_id: CLIENT_ID,
+    //     client_secret: CLIENT_SECRET,
+    //     username,
+    //     password,
+    //   },
+    // });
 
-    const accessToken = loginResponse.data.access_token;
-    const instanceUrl = loginResponse.data.instance_url;
+    const accessToken = sessionId;//loginResponse.data.access_token;
+    const instanceUrl = ${LOGIN_URL};//loginResponse.data.instance_url;
     console.log('✅ Logged in to Salesforce');
 
     // Step 2: Create ZIP file with metadata
