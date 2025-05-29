@@ -7,12 +7,11 @@ const AdmZip = require('adm-zip');
 const app = express();
 app.use(bodyParser.json());
 
+// const { CLIENT_ID, CLIENT_SECRET, LOGIN_URL,} = process.env;
+
 const {
-  CLIENT_ID,
-  CLIENT_SECRET,
   LOGIN_URL,
 } = process.env;
-
  // Make sure this matches your org's version
 //const API_VERSION = '61.0'; // Make sure this matches your org's version
 app.post('/api/toggletrigger', async (req, res) => {
